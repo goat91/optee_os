@@ -37,6 +37,8 @@
 #include <sm/teesmc_opteed.h>
 #include <sm/teesmc_opteed_macros.h>
 
+.arch_extension sec
+
 .section .data
 .balign 4
 
@@ -433,6 +435,10 @@ shadow_stack_access_ok:
 	bl	cpu_mmu_enable
 	bl	cpu_mmu_enable_icache
 	bl	cpu_mmu_enable_dcache
+
+#ifdef CFG_PL050
+	bl	kb_init
+#endif
 
 	enable_branch_prediction
 

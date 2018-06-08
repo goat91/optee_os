@@ -47,6 +47,11 @@
 #include <tee/entry_fast.h>
 #include <tee/entry_std.h>
 #include <trace.h>
+#include <io.h>
+
+#ifdef CFG_PL050
+#include <drivers/pl050.h>
+#endif
 
 static void main_fiq(void);
 
@@ -80,6 +85,12 @@ register_phys_mem(MEM_AREA_RAM_SEC, TZCDRAM_BASE, TZCDRAM_SIZE);
 #if defined(PLATFORM_FLAVOR_qemu_virt)
 register_phys_mem(MEM_AREA_IO_SEC, SECRAM_BASE, SECRAM_COHERENT_SIZE);
 #endif
+#if defined(PLATFORM_FLAVOR_qemu_vexpress)
+register_phys_mem(MEM_AREA_IO_SEC, SECRAM_BASE, SECRAM_COHERENT_SIZE);
+#ifdef CFG_PL050
+register_phys_mem(MEM_AREA_IO_SEC, KMI_KB_BASE, KMI_KB_REG_SIZE);
+#endif
+#endif	//PLATFORM_FLAVOR_qemu_vexpress
 register_phys_mem(MEM_AREA_IO_SEC, CONSOLE_UART_BASE, PL011_REG_SIZE);
 register_nsec_ddr(DRAM0_BASE, DRAM0_SIZE);
 #ifdef DRAM1_BASE
@@ -116,12 +127,19 @@ void main_init_gic(void)
 	gic_init(&gic_data, gicc_base, gicd_base);
 #endif
 	itr_init(&gic_data.chip);
+
+	gic_dump_state(&gic_data);
 }
 
 #if !defined(CFG_WITH_ARM_TRUSTED_FW)
 void main_secondary_init_gic(void)
 {
 	gic_cpu_init(&gic_data);
+}
+#else
+void main_secondary_init_gic(void)
+{
+	gic_dump_state(&gic_data);
 }
 #endif
 
@@ -131,6 +149,64 @@ static void main_fiq(void)
 {
 	gic_it_handle(&gic_data);
 }
+
+#ifdef CFG_PL050
+static vaddr_t kmi_kb;
+static bool skip = true;
+
+
+static enum itr_return kb_itr_handler(struct itr_handler *h __unused){
+	volatile uint8_t tsc;
+	char code;
+
+	uint8_t ir = read8(kmi_kb + KMIIR_OFFSET);
+
+	if (ir & KMIIR_RXINTR) {
+		tsc = read8(kmi_kb + KMIDATA_OFFSET);
+
+		if (tsc < 0x80 && !skip)	{
+			code = kbd_get_code(tsc);
+			DMSG("Got key: '%c'\n", code);
+			skip = true;
+		} else if (tsc == 0xf0)
+			skip = false;
+	}
+
+	return ITRR_HANDLED;
+}
+
+static struct itr_handler kb_itr = {
+	.it = IT_KMI_KEYBOARD,
+	.flags = ITRF_TRIGGER_LEVEL,
+	.handler = kb_itr_handler,
+};
+KEEP_PAGER(kb_itr);
+
+static __maybe_unused TEE_Result kb_init_itr(void)
+{
+	DMSG("Enable interrupt %d for kmi keyboard\n", IT_KMI_KEYBOARD);
+	itr_add(&kb_itr);					//set irq to group0
+	itr_enable(IT_KMI_KEYBOARD);		//enable irq line
+
+	return TEE_SUCCESS;
+}
+
+//driver_init(kb_init_itr);
+
+void kb_init(void)
+{
+	DMSG("Initializing KMI Keyboard ...");
+	kmi_kb = (vaddr_t)phys_to_virt(KMI_KB_BASE, MEM_AREA_IO_SEC);
+	if (!kmi_kb) {
+		DMSG("kmi-kb not mapped");
+		panic();
+	}
+
+	kbd_enable(kmi_kb);
+}
+
+#endif
+
 
 void console_init(void)
 {
@@ -147,7 +223,7 @@ static enum itr_return console_itr_cb(struct itr_handler *h __unused)
 	while (cons->ops->have_rx_data(cons)) {
 		int ch __maybe_unused = cons->ops->getchar(cons);
 
-		DMSG("cpu %zu: got 0x%x", get_core_pos(), ch);
+		DMSG("cpu %zu: got 0x%x, '%c'", get_core_pos(), ch, ch);
 	}
 	return ITRR_HANDLED;
 }
@@ -161,6 +237,7 @@ KEEP_PAGER(console_itr);
 
 static TEE_Result init_console_itr(void)
 {
+	DMSG("Enable interrupt %d for uart console\n", IT_CONSOLE_UART);
 	itr_add(&console_itr);
 	itr_enable(IT_CONSOLE_UART);
 	return TEE_SUCCESS;

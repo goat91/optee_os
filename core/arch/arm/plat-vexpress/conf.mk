@@ -3,6 +3,10 @@ PLATFORM_FLAVOR ?= qemu_virt
 ifeq ($(PLATFORM_FLAVOR),qemu_virt)
 include core/arch/arm/cpu/cortex-a15.mk
 endif
+ifeq ($(PLATFORM_FLAVOR),qemu_vexpress)
+include core/arch/arm/cpu/cortex-a15.mk
+$(call force,CFG_PL050,y)
+endif
 ifeq ($(PLATFORM_FLAVOR),fvp)
 include core/arch/arm/cpu/cortex-armv8-0.mk
 platform-debugger-arm := 1

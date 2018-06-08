@@ -40,6 +40,7 @@
 
 #include "thread_private.h"
 
+	.arch_extension sec
 	.section .text.thread_asm
 
 LOCAL_FUNC vector_std_smc_entry , :
